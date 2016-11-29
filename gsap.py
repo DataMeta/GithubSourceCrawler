@@ -13,7 +13,7 @@ import winsound
 freq = 650 # in Hz
 dur = 300 # in ms
 
-# Makes the program feel pretty, does nothing.
+# Makes the program feel prettyful, does nothing. 
 def init_it():
     rand = 1 + random.random()
     print("Accessing Github API ...")
