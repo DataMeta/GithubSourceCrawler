@@ -102,7 +102,7 @@ def parse_variables(repository, sha, server_path):
 #input()
 init_it()
 # Initialize Github object with token associated with my username
-github = Github("0dd2703fd48ce4e223fc51887114b6fde556f594") 
+github = Github("oauth") 
 query_addon = " in:login type:user"# language:java" #Filter for users with java repos in the majority
 user_list = search_dialog()
 
