@@ -1,19 +1,24 @@
 # Daniel Melnikov
-# Github Source Code Analysis (operative name)
-# Version 1.7.4
+# Github Source Code Analysis 
+# Version 1.0.9
 
 from github import Github
+from wordgen import *
 import base64
 import re
 import time
 import random
 import logging
 import winsound
+import enchant
+import datetime
 
 freq = 650 # in Hz
 dur = 300 # in ms
 
-# Makes the program feel prettyful, does nothing. 
+dict_lookup = enchant.Dict("en_US")
+
+# Actually gave me an idea for combatting an anti-ddos response
 def init_it():
     rand = 1 + random.random()
     print("Accessing Github API ...")
@@ -22,12 +27,13 @@ def init_it():
     time.sleep(rand * random.random())
     print()
 
-def search_dialog():
-    print("Username to search for (part of username allowed):")
-    user_query = input("> ")
-    user_query += query_addon
-    user_list = github.search_users(user_query, "repositories", "desc")
-    return user_list
+# Handles input for user search
+def search_dialog(query, query_addon):
+    # print("Launch search query when ready:")
+    # input("> ")
+    query = query + " " + query_addon
+    user_list = github.search_users(query, "repositories", "asc")
+    return (user_list, query)
 
 # Fast duplicate removal which preserves order for debugging
 def uniquify(seq):
@@ -50,104 +56,181 @@ def get_sha_for_tag(repository, tag):
 
 # Downloads all contents at path with commit tag "sha" in the repository.
 def download_directory(repository, sha, server_path, source_container):
-    contents = repository.get_dir_contents(server_path, ref=sha)
-    
-    for content in contents:
-        print ("Processing %s" % content.path)
-        if content.type == 'dir':
-            download_directory(repository, sha, content.path, source_container)
-        else:
-            if content.size < 1000000: # Github API limits file size
-                try:
-                    if content.path.endswith(".java"):
-                        path = content.path
-                        file_content = repository.get_contents(path, ref=sha)
-                        file_data = base64.standard_b64decode(file_content.content)
-                        data_string = file_data.decode(encoding='UTF-8')
-                        source_container.append(data_string)
-                except (Exception, IOError) as exc:
-                    logging.error('Error processing %s: %s', content.path, exc)
+    try:
+        contents = repository.get_dir_contents(server_path, ref=sha)
+        for content in contents:
+            print ("Processing %s" % content.path)
+            if content.type == 'dir':
+                download_directory(repository, sha, content.path, source_container)
+            else:
+                if content.size < 1000000: # Github API limits file size
+                    try:
+                        if content.path.endswith(".java"):
+                            path = content.path
+                            file_content = repository.get_contents(path, ref=sha)
+                            file_data = base64.standard_b64decode(file_content.content)
+                            data_string = file_data.decode(encoding='UTF-8')
+                            source_container.append(data_string)
+                    except (Exception, IOError) as exc:
+                        logging.error('Error processing %s: %s', content.path, exc)
+    except (Exception) as exc:
+        logging.error('An exception occured while downloading directory: ', exc)
     return source_container
 
 # Parses for all variables in a repository
 def parse_variables(repository, sha, server_path):
     source_container = []
     dir_content = download_directory(repository, sha, server_path, source_container)
-    #re_pattern = r'(?:byte|Byte|short|Short|long|Long|int|Integer|float|Float|String)(\s[^\s]+)(?:\s=|;)'
-    #re_pattern = r'((?:(?:static\s*|final\s*|volatile\s*|byte\s*|Byte\s*|short\s*|Short\s*|long\s*|Long\s*|int\s*|Integer\s*|float\s*|Float\s*|String\s*)+)(?:\s+\*?\*?\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*[\[;,=)])'
     re_pattern = r'(?:(?:static\s*|final\s*|volatile\s*|byte\s*|Byte\s*|short\s*|Short\s*|long\s*|Long\s*|int\s*|Integer\s*|float\s*|Float\s*|String\s*)+)(?:\s+\*?\*?\s*)([a-zA-Z_][a-zA-Z0-9_]*)\s*[\[;,=)]'
-    
     length = 0
     count = 0
-
+    dictword_count = 0
     for content in dir_content:
         matches = re.findall( re_pattern, content, re.DOTALL)
         for match in matches:
             if not None:
-                print(match)
+                print(match) # Debugging visual aid
+                if dict_lookup.check(match):
+                    dictword_count += 1
                 length += len(match)
                 count += 1
-        
-    if count > 0:
-        average_length = length/count
-        print("\nNumber of variables found in this repository: ", count)
-        print("Average variable length in characters: ", average_length)
-    else:
-        print("No variables found")
-    package = (length, count)
+    print()
+    package = (length, count, dictword_count)
     return package
 
+# Get owner commit ratio for a repo (to determine primary or majority contributor)
+def check_commits(repository, sha, server_path):
+    print("\nCHECKING REPOSITORY COMMITS")
+    owner_commits = 0
+    total_commits = 0
+    commits = repository.get_commits(sha, server_path)
+    for commit in commits:
+        # Request rate governor; 
+        # Keeps program from triggering denial of service false positive
+        # if total_commits%1000 == 0:
+        #     time.sleep(.999)
+        # if total_commits%100 == 0:
+        #     time.sleep(.099)
+        # if total_commits%10 == 0:
+        #     time.sleep(.009)
+        print(".", end=" ") # To see the program working during debug
+        total_commits += 1
+        if commit.author == repository.owner:
+            owner_commits += 1
+    print()
+    return owner_commits/total_commits
 
-#Start of program
-#input()
-init_it()
-# Initialize Github object with token associated with my username
-github = Github("oauth") 
-query_addon = " in:login type:user"# language:java" #Filter for users with java repos in the majority
-user_list = search_dialog()
+# Crawls user's repos and analyzes source code that is from repos 
+#   for which the user is a majority contributor 
+# Determines average variable length and ratio of variables found in the dictionary
+def analyze_user(user):
+    rand = 1 + random.random()
+    #time.sleep(rand * random.random())
+    path = ''
+    total_length = 0
+    total_count = 0
+    total_dictwords = 0
+    commit_ratio = -1
+    repositories = user.get_repos()
+    for repository in repositories:
+        time.sleep(rand * random.random()) # Keeps the connection from being closed from suspicion of dos attack
+        try:
+            sha = get_sha_for_tag(repository, 'master')
+            try:
+                commit_ratio = check_commits(repository, sha, path)
+            except (Exception) as exc:
+                logging.error('Commit(s) not found: ', exc)
+            if  commit_ratio >= .5:
+                package = parse_variables(repository, sha, path)
+                total_length += package[0]
+                total_count += package[1]
+                total_dictwords += package[2]
+        except (Exception) as exc:
+            logging.error('No master branch exists for this repo: ', exc)
+        #time.sleep(rand * random.random())
+    data = (total_length, total_count, total_dictwords)
+    return data
 
-print("User(s) found:")
-user_count = 0
-try:
+# Handles processing of user sample 
+def process_user_sample(user_list):
+    print("\n[][][]PROCESSING USER SAMPLE[][][]")
+    result_length = 0
+    result_count = 0
+    result_dictwords = 0
+    user_count = 0
     for user in user_list:
         user_count += 1
-        print("#", user_count, user.login)
-except (Exception) as exc:
-    logging.error('API rate limit exceeded')
-    
-print("\nSelection:")
-user_num = int(input("> "))
+        print("\n-----\nANALYZING USER #", user_count)
+        print("-----")
+        data = analyze_user(user)
 
-user = user_list[user_num-1]
-path = ''
-repositories = user.get_repos()
-total_length = 0
-total_count = 0
+        # Saves each user's data without query and run time in case the 
+        # github API rate limit is hit and program interrupts
+        log_data(-1,user_count,data,-1) 
+        result_length += data[0]
+        result_count += data[1]
+        result_dictwords += data[2]
+    result = (result_length, result_count, result_dictwords)
+    return result
 
-start_time = time.clock()
-# Crawl all repositories
-for repository in repositories:
+# Wrapper method that handles the search and analysis run
+def launch_handler():
+    query_addon = "in:login type:user language:java followers:1"
+    query = Random_Word(3) # Generates a word of input length
+    print ("Query: ", query, query_addon)
+    search_query = query + " " + query_addon
+    #search_query = query_addon/
+    user_list = github.search_users(search_query, "followers", "asc")
+
+    print("\nUser(s) found:")
+    user_count = 0
     try:
-        sha = get_sha_for_tag(repository, 'master')
-        package = parse_variables(repository, sha, path)
-        total_length += package[0]
-        total_count += package[1]
+        for user in user_list:
+            user_count += 1
+            print("#", user_count, user.login)
     except (Exception) as exc:
-        logging.error('\nThis repository has no master branch or doesn\'t exist\n') 
-    
-stop_time = time.clock()
+        logging.error('Search API rate limit exceeded')
+        
+    payload = []
+    for i in range(user_count):
+        payload.append(user_list[i])
 
-if total_count > 0:
-    total_average = total_length / total_count
-    print("\nNumber of variables found for this user: ", total_count)
-    print("Average variable length in characters: ", total_average, "\n")
-else:
-    print("\nNo variables found\n")
+    print("\nMANUAL LAUNCH: ")
+    input("> ")
+    start_time = time.clock()
+    result = process_user_sample(payload)
+    stop_time = time.clock()
+    elapsed = stop_time - start_time
+    log_data(search_query, user_count, result, elapsed)
 
-elapsed = stop_time - start_time
-print("Time elapsed:", elapsed, "seconds")
+# Writes data to file
+def log_data(search_query, user_count, result, elapsed):
+    result_length = result[0]
+    result_count = result[1]
+    result_dictwords = result[2]
+    results_file = open('results3.txt', 'a')
+
+    results_file.write("{}\n".format(search_query))
+    results_file.write("{}\n".format(user_count))
+    results_file.write("{}\n".format(result_length))
+    results_file.write("{}\n".format(result_count))
+    results_file.write("{}\n".format(result_dictwords))
+    results_file.write("{}\n\n".format(elapsed))
+    results_file.close()
+
+def check_rate_limit(): 
+    print("Requests remaining: ", github.rate_limiting[0])
+    print("Request max: ", github.rate_limiting[1])
+    value = datetime.datetime.fromtimestamp(github.rate_limiting_resettime)
+    print("Rate limit reset time, ", value.strftime('%Y-%m-%d %H:%M:%S'))
+
+# Start of program
+init_it()
+# Initialize Github object with token associated with my username
+github = Github("84c208233df1a6fa29d9e3adae2969001867453f") 
+
+launch_handler()
+check_rate_limit()
 
 #winsound.Beep(freq,dur)
-input("\nPress \"Enter\" to exit: \n")
-
-
+#input("\nPress \"Enter\" to exit: \n")
