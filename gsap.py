@@ -30,7 +30,7 @@ def init_it():
 # Handles input for user search
 def search_dialog(query, query_addon):
     # print("Launch search query when ready:")
-    # input("> ")
+    # input("> ") 
     query = query + " " + query_addon
     user_list = github.search_users(query, "repositories", "asc")
     return (user_list, query)
