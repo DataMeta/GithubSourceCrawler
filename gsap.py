@@ -227,7 +227,8 @@ def check_rate_limit():
 # Start of program
 init_it()
 # Initialize Github object with token associated with my username
-github = Github("84c208233df1a6fa29d9e3adae2969001867453f") 
+github = Github("84c208233df1b6fa29d9e3adae2969001867453f") 
+# Invalid token in this repo to prevent permissions hijacking by another userwith the github api
 
 launch_handler()
 check_rate_limit()
