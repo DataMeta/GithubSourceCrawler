@@ -32,7 +32,7 @@ def search_dialog(query, query_addon):
     # print("Launch search query when ready:")
     # input("> ") 
     query = query + " " + query_addon
-    user_list = github.search_users(query, "repositories", "asc")
+    user_list = github.search_users(query, "repositories", "asc") 
     return (user_list, query)
 
 # Fast duplicate removal which preserves order for debugging
